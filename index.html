@@ -118,11 +118,12 @@
   <div class="overlay" id="overlay">
     <div class="modal">
       <h2>⚙️ Настройки</h2>
-      <p>Чтобы пользоваться моделью <b>DeepSeek V4 Flash</b>, вставь свой ключ OpenModel
-         (начинается с <code>om-</code>). Получить можно бесплатно на console.openmodel.ai.
-         Ключ хранится только в этом браузере и отправляется на сервер только для твоих запросов.</p>
-      <label for="omkey">Ключ OpenModel</label>
-      <input id="omkey" type="password" placeholder="om-..." autocomplete="off" spellcheck="false">
+      <p>Премиум-модель <b>Gemini 2.5 Flash</b> работает по ключу владельца сайта.
+         Если хочешь использовать свой — вставь ключ Google AI Studio
+         (начинается с <code>AIza</code> или <code>AQ.</code>). Бесплатно, без карты: aistudio.google.com.
+         Ключ хранится только в этом браузере.</p>
+      <label for="omkey">Свой ключ Gemini (необязательно)</label>
+      <input id="omkey" type="password" placeholder="AIza... или AQ...." autocomplete="off" spellcheck="false">
       <div class="modal-row">
         <button class="btn" id="cancel">Отмена</button>
         <button class="btn primary" id="save">Сохранить</button>
@@ -136,7 +137,7 @@ const logEl=$("#log"), mainEl=$("#main"), inputEl=$("#input"), sendBtn=$("#send"
       modelSel=$("#model"), overlay=$("#overlay");
 
 let messages = JSON.parse(localStorage.getItem("chat_messages") || "[]");
-let omKey = localStorage.getItem("om_key") || "";
+let omKey = localStorage.getItem("gemini_key") || "";
 let busy = false;
 
 marked.setOptions({breaks:true});
@@ -201,7 +202,7 @@ async function send(){
   try{
     const resp = await fetch("/api/chat", {
       method:"POST", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({ model: modelSel.value, messages, om_key: omKey })
+      body: JSON.stringify({ model: modelSel.value, messages, gemini_key: omKey })
     });
     if(!resp.ok){
       const e = await resp.json().catch(()=>({error:"Ошибка сервера"}));
@@ -249,7 +250,7 @@ $("#cancel").addEventListener("click", ()=>overlay.classList.remove("open"));
 overlay.addEventListener("click", e=>{ if(e.target===overlay) overlay.classList.remove("open"); });
 $("#save").addEventListener("click", ()=>{
   omKey = $("#omkey").value.trim();
-  localStorage.setItem("om_key", omKey);
+  localStorage.setItem("gemini_key", omKey);
   overlay.classList.remove("open");
 });
 
