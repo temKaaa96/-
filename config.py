@@ -23,7 +23,7 @@ def _clean_key(k: str) -> str:
     return k
 
 GEMINI_API_KEY = _clean_key(os.environ.get("GEMINI_API_KEY", ""))
-GEMINI_BASE_URL = os.environ.get("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai")
+GEMINI_BASE_URL = os.environ.get("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta")
 
 # Премиум-модели (обе бесплатные на free-тарифе):
 #   PREMIUM_MODEL  — умнее (gemini-2.5-flash)

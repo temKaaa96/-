@@ -44,12 +44,11 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger(__name__)
 
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-GEMINI_URL = f"{GEMINI_BASE_URL.rstrip('/')}/chat/completions"
+GEMINI_NATIVE_BASE = GEMINI_BASE_URL.rstrip("/")  # native эндпоинт Gemini
 
-# Провайдер -> (url, ключ по умолчанию). Оба в OpenAI-совместимом формате.
+# Провайдеры в OpenAI-совместимом формате (Gemini обрабатывается отдельно — native).
 ENDPOINTS = {
     "groq": (GROQ_URL, GROQ_API_KEY),
-    "gemini": (GEMINI_URL, GEMINI_API_KEY),
 }
 
 # Модель для анализа фото (vision) — через Groq.
@@ -425,9 +424,54 @@ class TgStreamer:
 
 
 # ─── Запросы к моделям ───────────────────────────────────────────────────────
+def to_gemini_contents(messages: list) -> list:
+    """OpenAI-стиль (user/assistant) -> Gemini native (user/model + parts)."""
+    contents = []
+    for m in messages:
+        role = "model" if m.get("role") == "assistant" else "user"
+        contents.append({"role": role, "parts": [{"text": m.get("content", "")}]})
+    return contents
+
+
+async def _stream_gemini(model: str, messages: list, on_delta, api_key: str = None):
+    """Родной Gemini API (работает с ключами AIza и AQ.)."""
+    key = api_key or GEMINI_API_KEY
+    url = f"{GEMINI_NATIVE_BASE}/models/{model}:streamGenerateContent?alt=sse"
+    headers = {"x-goog-api-key": key, "Content-Type": "application/json"}
+    payload = {
+        "contents": to_gemini_contents(messages),
+        "generationConfig": {
+            "maxOutputTokens": MAX_TOKENS,
+            "thinkingConfig": {"thinkingBudget": 0},  # без «размышлений» — быстрее и весь бюджет на ответ
+        },
+    }
+    async with httpx.AsyncClient(timeout=httpx.Timeout(180.0, connect=20.0)) as client:
+        async with client.stream("POST", url, headers=headers, json=payload) as resp:
+            if resp.status_code >= 400:
+                raise ApiError(resp.status_code, (await resp.aread()).decode("utf-8", "ignore"))
+            async for line in resp.aiter_lines():
+                line = line.strip()
+                if not line.startswith("data:"):
+                    continue
+                data = line[5:].strip()
+                if not data:
+                    continue
+                try:
+                    obj = json.loads(data)
+                    for part in obj["candidates"][0]["content"]["parts"]:
+                        if part.get("text") and not part.get("thought"):
+                            await on_delta(part["text"])
+                except Exception:
+                    continue
+
+
 async def stream_completion(provider: str, model: str, messages: list, on_delta,
                             api_key: str = None) -> None:
-    """Groq и Gemini оба в OpenAI-совместимом формате (/chat/completions)."""
+    """Groq — OpenAI-формат; Gemini — родной API."""
+    if provider == "gemini":
+        await _stream_gemini(model, messages, on_delta, api_key)
+        return
+
     url, default_key = ENDPOINTS[provider]
     key = api_key or default_key
     headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
@@ -839,7 +883,7 @@ async def cb_set_key(cb: CallbackQuery, state: FSMContext):
         return
     await state.set_state(SettingsSG.waiting_key)
     await cb.message.answer(
-        "🔑 Пришли свой ключ Gemini одним сообщением (начинается с <code>AIza</code>).\n"
+        "🔑 Пришли свой ключ Gemini одним сообщением (начинается с <code>AIza</code> или <code>AQ.</code>).\n"
         "Получить бесплатно (без карты) на aistudio.google.com.\n\nЧтобы отменить — отправь /cancel",
         parse_mode="HTML",
     )
@@ -873,8 +917,8 @@ async def receive_ds_key(msg: Message, state: FSMContext):
         await msg.delete()
     except TelegramBadRequest:
         pass
-    if not (key.startswith("AIza") and len(key) >= 20):
-        await msg.answer("❌ Это не похоже на ключ Gemini (должен начинаться с AIza). "
+    if not ((key.startswith("AIza") or key.startswith("AQ.")) and len(key) >= 20):
+        await msg.answer("❌ Это не похоже на ключ Gemini (должен начинаться с AIza или AQ.). "
                          "Попробуй ещё раз через ⚙️ Настройки.")
         return
     set_user_field(msg.from_user.id, "ds_key", key)
