@@ -109,8 +109,17 @@
   .msg.user .avatar{background:var(--user);color:#c7d2fe}
   body.light .msg.user .avatar{color:#4655a8}
   .msg.assistant .avatar{background:linear-gradient(135deg,var(--accent),var(--accent-2));color:#fff}
+  .bubcol{display:flex;flex-direction:column;gap:6px;max-width:80%}
+  .msg.user .bubcol{align-items:flex-end}
   .bubble{padding:12px 15px;border-radius:14px;line-height:1.62;font-size:16px;border:1px solid var(--line-soft);
-    max-width:80%;overflow-wrap:anywhere;box-shadow:0 2px 10px rgba(0,0,0,.10)}
+    max-width:100%;overflow-wrap:anywhere;box-shadow:0 2px 10px rgba(0,0,0,.10)}
+  .actions{display:flex;gap:6px;padding-left:2px;opacity:.65;transition:opacity .15s}
+  .msg:hover .actions{opacity:1}
+  .act{display:inline-flex;align-items:center;gap:5px;background:none;border:none;color:var(--faint);
+    cursor:pointer;font-size:12px;padding:3px 7px;border-radius:7px;transition:.14s var(--ease)}
+  .act:hover{color:var(--text);background:var(--panel-2)}
+  .send.stop{background:var(--danger);box-shadow:0 4px 14px rgba(255,107,107,.32)}
+  .send.stop:hover{box-shadow:0 6px 18px rgba(255,107,107,.45)}
   .msg.user .bubble{background:var(--user);color:var(--user-text);border-color:transparent}
   .msg.assistant .bubble{background:var(--assistant)}
   .bubble .txt p{margin:.45em 0}.bubble .txt p:first-child{margin-top:0}.bubble .txt p:last-child{margin-bottom:0}
@@ -212,7 +221,7 @@
     .sidebar{position:fixed;top:0;left:0;bottom:0;transform:translateX(-100%);box-shadow:0 0 40px rgba(0,0,0,.5)}
     body.nav-open .sidebar{transform:none}
     body.nav-open .scrim{display:block}
-    .bubble{max-width:86%}
+    .bubcol{max-width:86%}
     .gallery{grid-template-columns:repeat(2,1fr)}
   }
 </style>
@@ -325,6 +334,9 @@ const ICONS={
   ban:'<circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/>',
   play:'<polygon points="6 4 20 12 6 20 6 4" fill="currentColor" stroke="none"/>',
   x:'<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>',
+  copy:'<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
+  check:'<polyline points="20 6 9 17 4 12"/>',
+  regen:'<polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>',
 };
 function svg(name,size){size=size||19;
   return `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${ICONS[name]||""}</svg>`;}
@@ -334,7 +346,7 @@ function fillIcons(root){(root||document).querySelectorAll("[data-ic]").forEach(
 });}
 
 let state=load();
-let pending=null,busy=false;
+let pending=null,busy=false,abort=null;
 let mediaRecorder=null,audioChunks=[],recording=false;
 let bgList=[];
 
@@ -486,10 +498,22 @@ function renderThread(){
     t.querySelectorAll(".chip").forEach(c=>c.onclick=()=>{$("#input").value=c.dataset.q;send();});
     return;
   }
-  for(const m of msgs){
+  for(let i=0;i<msgs.length;i++){
+    const m=msgs[i];
     const el=document.createElement("div");
     el.className="msg "+m.role;
-    el.innerHTML=`<div class="avatar">${svg(m.role==="user"?"user":"spark",17)}</div><div class="bubble">${bubbleInner(m)}</div>`;
+    let html=`<div class="avatar">${svg(m.role==="user"?"user":"spark",17)}</div><div class="bubcol"><div class="bubble">${bubbleInner(m)}</div>`;
+    if(m.role==="assistant"&&m.content){
+      const isLast=(i===msgs.length-1);
+      html+=`<div class="actions"><button class="act" data-a="copy">${svg("copy",14)} Копировать</button>`
+        +(isLast?`<button class="act" data-a="regen">${svg("regen",14)} Заново</button>`:"")+`</div>`;
+    }
+    html+=`</div>`;
+    el.innerHTML=html;
+    if(m.role==="assistant"&&m.content){
+      const cp=el.querySelector('[data-a="copy"]');if(cp)cp.onclick=()=>copyMsg(m.content,cp);
+      const rg=el.querySelector('[data-a="regen"]');if(rg)rg.onclick=()=>regenerate();
+    }
     t.appendChild(el);
   }
   down();
@@ -545,7 +569,7 @@ function updateMic(){
 async function send(){
   const text=$("#input").value.trim();
   if((!text&&!pending)||busy||recording)return;
-  busy=true;$("#send").disabled=true;
+  setBusy(true);
   let content=text,display=text,image=null,fileName=null;
 
   if(pending&&pending.kind==="audio"){
@@ -575,44 +599,98 @@ async function send(){
   const c=chat();
   c.messages.push({role:"user",content,display,image,file:fileName});
   if(c.title==="Новый чат")c.title=(display||fileName||"Фото").slice(0,42);
-  c.messages.push({role:"assistant",content:""});
   save();renderSidebar();renderThread();
+  await streamAssistant();
+}
 
+async function streamAssistant(){
+  const c=chat();
+  c.messages.push({role:"assistant",content:""});
+  save();renderThread();
   const bub=$("#thread").querySelector(".msg.assistant:last-child .bubble");
-  bub.classList.add("cursor");
+  if(bub)bub.classList.add("cursor");
   const reqMessages=c.messages.filter(m=>m.role==="user"||(m.role==="assistant"&&m.content))
                               .map(m=>({role:m.role,content:m.content}));
+  const lastUser=[...c.messages].reverse().find(m=>m.role==="user");
+  const image=lastUser?lastUser.image:null;
   let acc="";
+  setBusy(true);
+  abort=new AbortController();
   try{
     const resp=await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},
+      signal:abort.signal,
       body:JSON.stringify({model:state.model,messages:reqMessages,image,gemini_key:state.geminiKey})});
     if(!resp.ok){
       const e=await resp.json().catch(()=>({}));
-      bub.classList.remove("cursor");bub.innerHTML=`<div class="txt">${renderMd("⚠️ "+(e.error||"Ошибка"))}</div>`;
-      c.messages.pop();save();finish();return;
+      if(bub){bub.classList.remove("cursor");bub.innerHTML=`<div class="txt">${renderMd("⚠️ "+(e.error||"Ошибка"))}</div>`;}
+      c.messages.pop();save();abort=null;setBusy(false);renderThread();return;
     }
     const reader=resp.body.getReader(),dec=new TextDecoder();
     while(true){
       const {done,value}=await reader.read();if(done)break;
       acc+=dec.decode(value,{stream:true});
-      bub.innerHTML=`<div class="txt">${renderMd(acc)}</div>`;down();
+      if(bub){bub.innerHTML=`<div class="txt">${renderMd(acc)}</div>`;down();}
     }
-    bub.classList.remove("cursor");bub.innerHTML=`<div class="txt">${renderMd(acc)}</div>`;
     c.messages[c.messages.length-1].content=acc;save();
   }catch(e){
-    bub.classList.remove("cursor");bub.innerHTML=`<div class="txt">${renderMd("⚠️ Нет связи с сервером.")}</div>`;
-    c.messages.pop();save();
+    if(e.name==="AbortError"){
+      if(acc)c.messages[c.messages.length-1].content=acc;else c.messages.pop();
+      save();
+    }else{
+      if(bub){bub.classList.remove("cursor");bub.innerHTML=`<div class="txt">${renderMd("⚠️ Нет связи с сервером.")}</div>`;}
+      c.messages.pop();save();
+    }
   }
-  finish();
+  abort=null;setBusy(false);renderSidebar();renderThread();
+  maybeAutoTitle(c);
 }
-function finish(){busy=false;$("#send").disabled=false;$("#input").focus();}
-function fail(msg){busy=false;$("#send").disabled=false;pending=null;renderPending();alert(msg);}
+
+async function regenerate(){
+  if(busy)return;
+  const c=chat();
+  if(!c.messages.length||c.messages[c.messages.length-1].role!=="assistant")return;
+  c.messages.pop();save();renderThread();
+  await streamAssistant();
+}
+
+async function maybeAutoTitle(c){
+  if(c.titled)return;
+  const users=c.messages.filter(m=>m.role==="user");
+  const asst=c.messages.filter(m=>m.role==="assistant"&&m.content);
+  if(!users.length||!asst.length)return;
+  c.titled=true;save();
+  try{
+    const q=(users[0].display||users[0].content||"").slice(0,300);
+    const prompt=`Придумай очень короткое название (3–5 слов, на русском, без кавычек и без точки в конце) для диалога по этому первому сообщению пользователя:\n\n"${q}"\n\nОтветь только названием.`;
+    const resp=await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({model:"llama-3.1-8b-instant",messages:[{role:"user",content:prompt}]})});
+    if(!resp.ok)return;
+    const reader=resp.body.getReader(),dec=new TextDecoder();let t="";
+    while(true){const {done,value}=await reader.read();if(done)break;t+=dec.decode(value,{stream:true});}
+    t=t.replace(/["«»\n\r]/g," ").replace(/\s+/g," ").trim().replace(/[.。]+$/,"").slice(0,48);
+    if(t){c.title=t;save();renderSidebar();}
+  }catch(e){}
+}
+
+function copyMsg(text,btn){
+  const ok=()=>{const o=btn.innerHTML;btn.innerHTML=svg("check",14)+" Скопировано";setTimeout(()=>{btn.innerHTML=o;},1400);};
+  if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(text).then(ok).catch(()=>{});}
+  else{const ta=document.createElement("textarea");ta.value=text;document.body.appendChild(ta);ta.select();try{document.execCommand("copy");ok();}catch(e){}ta.remove();}
+}
+
+function setBusy(b){
+  busy=b;
+  const s=$("#send");
+  if(b){s.innerHTML=svg("stop",18);s.title="Остановить";s.classList.add("stop");}
+  else{s.innerHTML=svg("send",19);s.title="Отправить";s.classList.remove("stop");$("#input").focus();}
+}
+function fail(msg){abort=null;setBusy(false);pending=null;renderPending();alert(msg);}
 
 /* ── ввод ── */
 function autoGrow(){const i=$("#input");i.style.height="auto";i.style.height=Math.min(i.scrollHeight,180)+"px";}
 $("#input").addEventListener("input",autoGrow);
 $("#input").addEventListener("keydown",e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();send();}});
-$("#send").onclick=send;
+$("#send").onclick=()=>{if(busy){if(abort)abort.abort();return;}send();};
 $("#newChat").onclick=newChat;
 
 /* ── ключи ── */
