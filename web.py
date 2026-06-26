@@ -51,7 +51,13 @@ HERE = Path(__file__).parent
 # и они доступны по /static/имя_файла
 STATIC_DIR = HERE / "static"
 STATIC_DIR.mkdir(exist_ok=True)
+# Каталог фонов: кидаешь сюда файлы (mp4/webm/gif/jpg/png) — они появятся в галерее
+BG_DIR = STATIC_DIR / "backgrounds"
+BG_DIR.mkdir(exist_ok=True)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+VIDEO_EXT = {".mp4", ".webm", ".ogv", ".mov"}
+IMAGE_EXT = {".jpg", ".jpeg", ".png", ".webp", ".avif"}
 
 
 class UpstreamError(Exception):
@@ -225,6 +231,27 @@ async def index():
 @app.get("/api/models")
 async def models():
     return {"models": [{"id": k, "label": v["label"]} for k, v in MODELS.items()]}
+
+
+@app.get("/api/backgrounds")
+async def backgrounds():
+    """Список файлов из static/backgrounds/ для галереи фонов."""
+    items = []
+    if BG_DIR.exists():
+        for p in sorted(BG_DIR.iterdir()):
+            if not p.is_file():
+                continue
+            ext = p.suffix.lower()
+            if ext in VIDEO_EXT:
+                typ = "video"
+            elif ext == ".gif":
+                typ = "gif"
+            elif ext in IMAGE_EXT:
+                typ = "image"
+            else:
+                continue
+            items.append({"name": p.stem, "url": f"/static/backgrounds/{p.name}", "type": typ})
+    return {"backgrounds": items}
 
 
 @app.post("/api/transcribe")
