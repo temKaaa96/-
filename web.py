@@ -20,6 +20,7 @@ from pathlib import Path
 import httpx
 from fastapi import FastAPI, Request, UploadFile, File
 from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
@@ -45,6 +46,12 @@ MODELS = {
 
 app = FastAPI(title="AI Chat")
 HERE = Path(__file__).parent
+
+# Папка для картинок оформления (фон, лого и т.п.): кладёшь файлы в static/,
+# и они доступны по /static/имя_файла
+STATIC_DIR = HERE / "static"
+STATIC_DIR.mkdir(exist_ok=True)
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
 class UpstreamError(Exception):
